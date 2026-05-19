@@ -1,0 +1,8 @@
+sse-debug-tool
+*.exe
+*.test
+*.out
+.env
+.env.*
+.git
+.gitignore

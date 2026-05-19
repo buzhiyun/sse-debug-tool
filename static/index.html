@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSE Debug Tool</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <header class="app-header">
+        <div class="logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 12h4M12 12h4M20 12h-4"/>
+                <path d="M8 8l4-4 4 4"/>
+                <path d="M8 16l4 4 4-4"/>
+            </svg>
+            <span>SSE Debug Tool</span>
+        </div>
+        <div class="header-actions">
+            <button class="btn-icon" id="historyBtn" title="Request History (Ctrl+H)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+            </button>
+            <label class="ssl-toggle" title="Skip SSL certificate verification">
+                <input type="checkbox" id="skipSSL">
+                <span>Skip SSL</span>
+            </label>
+        </div>
+    </header>
+
+    <main class="app-main">
+        <!-- Request Bar -->
+        <div class="request-bar">
+            <select id="method">
+                <option value="GET">GET</option>
+                <option value="POST" selected>POST</option>
+                <option value="PUT">PUT</option>
+                <option value="DELETE">DELETE</option>
+                <option value="PATCH">PATCH</option>
+                <option value="HEAD">HEAD</option>
+                <option value="OPTIONS">OPTIONS</option>
+            </select>
+            <input type="text" id="url" placeholder="https://api.example.com/v1/chat/completions" spellcheck="false">
+            <button id="sendBtn" class="btn-send">Send</button>
+            <button id="abortBtn" class="btn-abort" style="display:none">Abort</button>
+        </div>
+
+        <!-- Request Config -->
+        <div class="panel request-panel">
+            <div class="tab-bar">
+                <button class="tab active" data-group="request" data-tab="headers">Headers</button>
+                <button class="tab" data-group="request" data-tab="body">Body</button>
+                <button class="tab" data-group="request" data-tab="parse-rules">Parse Rules</button>
+            </div>
+            <div class="tab-contents">
+                <!-- Headers Tab -->
+                <div class="tab-content active" data-group="request" data-tab="headers">
+                    <div class="kv-editor">
+                        <div class="kv-header">
+                            <span class="kv-col">Key</span>
+                            <span class="kv-col">Value</span>
+                            <span class="kv-action"></span>
+                        </div>
+                        <div id="headersList" class="kv-list">
+                            <div class="kv-row">
+                                <input type="text" class="kv-key" value="Content-Type" placeholder="Header name">
+                                <input type="text" class="kv-value" value="application/json" placeholder="Header value">
+                                <button class="kv-remove" title="Remove">&times;</button>
+                            </div>
+                            <div class="kv-row">
+                                <input type="text" class="kv-key" value="Authorization" placeholder="Header name">
+                                <input type="text" class="kv-value" value="Bearer " placeholder="Header value">
+                                <button class="kv-remove" title="Remove">&times;</button>
+                            </div>
+                        </div>
+                        <button class="kv-add" id="addHeader">+ Add Header</button>
+                    </div>
+                </div>
+
+                <!-- Body Tab -->
+                <div class="tab-content" data-group="request" data-tab="body">
+                    <div class="body-config">
+                        <div class="body-type-selector">
+                            <label><input type="radio" name="bodyType" value="none"> None</label>
+                            <label><input type="radio" name="bodyType" value="json" checked> JSON</label>
+                            <label><input type="radio" name="bodyType" value="form"> Form</label>
+                            <label><input type="radio" name="bodyType" value="raw"> Raw</label>
+                        </div>
+                        <button class="btn-small" id="formatJson" title="Format JSON">{ }</button>
+                    </div>
+                    <div class="body-editors">
+                        <div class="body-editor" data-type="json">
+                            <textarea id="jsonBody" class="code-editor" spellcheck="false" placeholder="Enter JSON body">{
+  "model": "gpt-4",
+  "messages": [
+    {"role": "user", "content": "Hello"}
+  ],
+  "stream": true
+}</textarea>
+                        </div>
+                        <div class="body-editor" data-type="form" style="display:none">
+                            <div class="kv-editor">
+                                <div class="kv-header">
+                                    <span class="kv-col">Key</span>
+                                    <span class="kv-col">Value</span>
+                                    <span class="kv-action"></span>
+                                </div>
+                                <div id="formList" class="kv-list">
+                                    <div class="kv-row">
+                                        <input type="text" class="kv-key" placeholder="Field name">
+                                        <input type="text" class="kv-value" placeholder="Field value">
+                                        <button class="kv-remove" title="Remove">&times;</button>
+                                    </div>
+                                </div>
+                                <button class="kv-add" id="addFormField">+ Add Field</button>
+                            </div>
+                        </div>
+                        <div class="body-editor" data-type="raw" style="display:none">
+                            <textarea id="rawBody" class="code-editor" spellcheck="false" placeholder="Enter raw request body"></textarea>
+                        </div>
+                        <div class="body-editor" data-type="none" style="display:none">
+                            <div class="empty-hint">This request has no body.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Parse Rules Tab -->
+                <div class="tab-content" data-group="request" data-tab="parse-rules">
+                    <div class="parse-rules">
+                        <div class="rule-group">
+                            <label class="rule-label">Data Path</label>
+                            <input type="text" id="dataPath" class="rule-input" value="choices.0.delta.content" placeholder="e.g. choices.0.delta.content">
+                            <span class="rule-hint">JSON path to extract content from each SSE event data</span>
+                        </div>
+                        <div class="rule-group">
+                            <label class="rule-label">Role Path</label>
+                            <input type="text" id="rolePath" class="rule-input" placeholder="e.g. choices.0.delta.role or role">
+                            <span class="rule-hint">JSON path to extract role from each SSE event. Different roles will be displayed in separate blocks</span>
+                        </div>
+                        <div class="rule-group">
+                            <label class="rule-label">Type Path</label>
+                            <input type="text" id="typePath" class="rule-input" placeholder="e.g. parts.0.type">
+                            <span class="rule-hint">JSON path to extract content type (e.g. reasoning / text / data). Different types get distinct visual treatments</span>
+                        </div>
+                        <div class="rule-group">
+                            <label class="rule-label">Data Fallback Path</label>
+                            <input type="text" id="fallbackPath" class="rule-input" placeholder="e.g. parts.0.data">
+                            <span class="rule-hint">When Data Path returns nothing, try this path instead (useful for data/tool type events)</span>
+                        </div>
+                        <div class="rule-group">
+                            <label class="rule-label">Event Filter</label>
+                            <input type="text" id="eventFilter" class="rule-input" placeholder="e.g. message (leave empty for all events)">
+                            <span class="rule-hint">Only process events matching this event type</span>
+                        </div>
+                        <div class="rule-group">
+                            <label class="rule-label">Display Mode</label>
+                            <select id="displayMode" class="rule-select">
+                                <option value="stream">Stream (ChatGPT style)</option>
+                                <option value="events">Events (one per block)</option>
+                                <option value="raw">Raw SSE</option>
+                            </select>
+                            <span class="rule-hint">How to display SSE content in the Rendered tab</span>
+                        </div>
+                        <div class="rule-group">
+                            <label class="rule-label">Format</label>
+                            <select id="contentFormat" class="rule-select">
+                                <option value="markdown">Markdown</option>
+                                <option value="plain">Plain Text</option>
+                                <option value="json">JSON</option>
+                            </select>
+                            <span class="rule-hint">Content rendering format</span>
+                        </div>
+                        <div class="rule-group rule-checkbox">
+                            <label>
+                                <input type="checkbox" id="ignoreDone" checked>
+                                Ignore <code>[DONE]</code> signal
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="panel-divider" id="panelDivider"></div>
+
+        <!-- Response -->
+        <div class="panel response-panel">
+            <div class="tab-bar">
+                <button class="tab active" data-group="response" data-tab="rendered">Rendered</button>
+                <button class="tab" data-group="response" data-tab="raw">Raw</button>
+                <button class="tab" data-group="response" data-tab="resp-headers">Headers</button>
+                <div class="tab-actions">
+                    <button class="btn-small" id="clearBtn" title="Clear response">Clear</button>
+                    <button class="btn-small" id="copyBtn" title="Copy rendered content">Copy</button>
+                </div>
+            </div>
+            <div class="tab-contents">
+                <div class="tab-content active" data-group="response" data-tab="rendered">
+                    <div id="renderedOutput" class="output-area">
+                        <div class="empty-state">Send a request to see the response</div>
+                    </div>
+                </div>
+                <div class="tab-content" data-group="response" data-tab="raw">
+                    <div id="rawOutput" class="output-area raw-output">
+                        <div class="empty-state">Send a request to see raw SSE events</div>
+                    </div>
+                </div>
+                <div class="tab-content" data-group="response" data-tab="resp-headers">
+                    <div id="headersOutput" class="output-area">
+                        <div class="empty-state">Send a request to see response headers</div>
+                    </div>
+                </div>
+            </div>
+            <div class="status-bar" id="statusBar">
+                <span id="statusIndicator" class="status-idle">Ready</span>
+                <span id="statusTime"></span>
+                <span id="statusSize"></span>
+                <span id="statusEvents"></span>
+            </div>
+        </div>
+    </main>
+
+    <!-- History Drawer -->
+    <div class="history-overlay" id="historyOverlay"></div>
+    <aside class="history-drawer" id="historyDrawer">
+        <div class="history-header">
+            <span>History</span>
+            <button class="btn-small" id="clearAllHistory">Clear All</button>
+        </div>
+        <div class="history-list" id="historyList">
+            <div class="history-empty">No requests yet</div>
+        </div>
+    </aside>
+
+    <script src="/app.js"></script>
+</body>
+</html>

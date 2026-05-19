@@ -1,0 +1,9 @@
+sse-debug-tool
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+.env
+.env.*
