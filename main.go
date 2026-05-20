@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"crypto/tls"
 	"embed"
 	"encoding/json"
@@ -75,10 +74,9 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
-	defer cancel()
-
-	targetReq, err := http.NewRequestWithContext(ctx, req.Method, req.URL, bodyReader)
+	// No total timeout — SSE streams can run arbitrarily long.
+	// Only limit connection establishment and idle time.
+	targetReq, err := http.NewRequestWithContext(r.Context(), req.Method, req.URL, bodyReader)
 	if err != nil {
 		writeSSEHeaders(w)
 		flusher, _ := w.(http.Flusher)
@@ -98,10 +96,13 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: req.SkipSSL,
 		},
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		IdleConnTimeout:       120 * time.Second,
 	}
+	// No Timeout on client — SSE streams must not have a total deadline.
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   300 * time.Second,
 	}
 
 	resp, err := client.Do(targetReq)
@@ -144,44 +145,67 @@ func parseSSEStream(body io.Reader, w http.ResponseWriter, flusher http.Flusher)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var event SSEEvent
-	for scanner.Scan() {
-		line := scanner.Text()
+	idleTimer := time.NewTimer(15 * time.Second)
+	defer idleTimer.Stop()
 
-		if line == "" {
-			if event.Data != "" || event.Event != "" {
-				writeSSE(w, flusher, "sse", event)
-				event = SSEEvent{}
+	// Channel for scanner lines
+	lineCh := make(chan string, 256)
+	go func() {
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		close(lineCh)
+	}()
+
+	for {
+		select {
+		case line, ok := <-lineCh:
+			if !ok {
+				// Scanner finished
+				if event.Data != "" || event.Event != "" {
+					writeSSE(w, flusher, "sse", event)
+				}
+				return
 			}
-			continue
-		}
+			idleTimer.Reset(15 * time.Second)
 
-		if strings.HasPrefix(line, ":") {
-			writeSSE(w, flusher, "comment", strings.TrimSpace(strings.TrimPrefix(line, ":")))
-			continue
-		}
-
-		field, value, ok := parseSSEField(line)
-		if !ok {
-			continue
-		}
-
-		switch field {
-		case "event":
-			event.Event = value
-		case "data":
-			if event.Data != "" {
-				event.Data += "\n"
+			if line == "" {
+				if event.Data != "" || event.Event != "" {
+					writeSSE(w, flusher, "sse", event)
+					event = SSEEvent{}
+				}
+				continue
 			}
-			event.Data += value
-		case "id":
-			event.ID = value
-		case "retry":
-			// handled client-side
-		}
-	}
 
-	if event.Data != "" || event.Event != "" {
-		writeSSE(w, flusher, "sse", event)
+			if strings.HasPrefix(line, ":") {
+				writeSSE(w, flusher, "comment", strings.TrimSpace(strings.TrimPrefix(line, ":")))
+				continue
+			}
+
+			field, value, ok := parseSSEField(line)
+			if !ok {
+				continue
+			}
+
+			switch field {
+			case "event":
+				event.Event = value
+			case "data":
+				if event.Data != "" {
+					event.Data += "\n"
+				}
+				event.Data += value
+			case "id":
+				event.ID = value
+			case "retry":
+				// handled client-side
+			}
+
+		case <-idleTimer.C:
+			// Upstream idle too long — send keepalive to browser
+			writeSSE(w, flusher, "comment", "keepalive")
+			idleTimer.Reset(15 * time.Second)
+		}
 	}
 }
 
