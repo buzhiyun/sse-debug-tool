@@ -30,11 +30,14 @@
         abortController: null,
         events: [],
         accumulatedText: "",
+        contentText: "",
+        reasoningText: "",
+        toolCalls: {},        // { index: { id, name, arguments, type } }
+        toolCallOrder: [],    // ordered list of tool call indices
+        _activeSection: "",   // "content" | "reasoning" | "tool"
         roles: {},
         roleOrder: [],
-        types: {},         // { "reasoning": "accumulated text", "text": "...", "data": {...} }
-        typeOrder: [],     // ordered list of type names as they appear
-        typeCategories: {},// { "data": "Homework_Component_SelfPaper_Create" }
+        _activeRole: "",
         responseHeaders: {},
         responseStatus: null,
         isSSE: false,
@@ -314,10 +317,10 @@
     // ── Parse Rules ────────────────────────────────────────
     function getParseRules() {
         return {
-            dataPath: $("#dataPath").value.trim(),
+            contentPath: $("#contentPath").value.trim(),
+            reasoningPath: $("#reasoningPath").value.trim(),
+            toolCallsPath: $("#toolCallsPath").value.trim(),
             rolePath: $("#rolePath").value.trim(),
-            typePath: $("#typePath").value.trim(),
-            fallbackPath: $("#fallbackPath").value.trim(),
             eventFilter: $("#eventFilter").value.trim(),
             displayMode: $("#displayMode").value,
             contentFormat: $("#contentFormat").value,
@@ -566,7 +569,7 @@
         appendRawSSE(event);
         clearEmptyState(renderedOutput);
 
-        // Parse JSON data once
+        // Parse JSON data
         var jsonData = null;
         if (event.data) {
             try { jsonData = JSON.parse(event.data); } catch { /* not JSON */ }
@@ -579,86 +582,106 @@
             if (roleVal != null) roleName = String(roleVal);
         }
 
-        // Extract type
-        var typeName = "";
-        if (rules.typePath && jsonData) {
-            var typeVal = getNestedValue(jsonData, rules.typePath);
-            if (typeVal != null) typeName = String(typeVal);
-        }
-
-        // Apply data path extraction
-        var content = "";
-        var contentIsObject = false;
-        if (rules.dataPath && jsonData) {
-            var extracted = getNestedValue(jsonData, rules.dataPath);
-            if (extracted !== undefined && extracted !== null) {
-                if (typeof extracted === "object") {
-                    content = JSON.stringify(extracted, null, 2);
-                    contentIsObject = true;
-                } else {
-                    content = String(extracted);
-                }
-            }
-        }
-        // Fallback path when data path returns nothing
-        if (!content && rules.fallbackPath && jsonData) {
-            var fbExtracted = getNestedValue(jsonData, rules.fallbackPath);
-            if (fbExtracted !== undefined && fbExtracted !== null) {
-                if (typeof fbExtracted === "object") {
-                    content = JSON.stringify(fbExtracted, null, 2);
-                    contentIsObject = true;
-                } else {
-                    content = String(fbExtracted);
-                }
-            }
-        }
-        // No paths set: use raw data
-        if (!rules.dataPath && !rules.fallbackPath) {
-            content = event.data || "";
-        }
-        if (!content) return;
-
         // Track role
         if (roleName && !state.roleOrder.includes(roleName)) {
             state.roleOrder.push(roleName);
         }
 
-        // Track type
-        if (typeName) {
-            if (!state.typeOrder.includes(typeName)) {
-                state.typeOrder.push(typeName);
-            }
-            // Extract category for data/tool types (e.g. parts.0.category)
-            if (jsonData && (typeName === "data" || typeName === "tool")) {
-                var categoryPath = rules.typePath.replace(/\.type$/, ".category");
-                var cat = getNestedValue(jsonData, categoryPath);
-                if (cat && !state.typeCategories[typeName]) {
-                    state.typeCategories[typeName] = String(cat);
-                }
+        var hadContent = false;
+
+        // 1. Try tool calls path
+        if (rules.toolCallsPath && jsonData) {
+            var toolCallsData = getNestedValue(jsonData, rules.toolCallsPath);
+            if (toolCallsData && Array.isArray(toolCallsData) && toolCallsData.length > 0) {
+                processToolCalls(toolCallsData);
+                hadContent = true;
             }
         }
 
+        // 2. Try reasoning path
+        if (rules.reasoningPath && jsonData) {
+            var reasoningVal = getNestedValue(jsonData, rules.reasoningPath);
+            if (reasoningVal != null && reasoningVal !== "") {
+                state.reasoningText += String(reasoningVal);
+                state._activeSection = "reasoning";
+                hadContent = true;
+            }
+        }
+
+        // 3. Try content path
+        if (rules.contentPath && jsonData) {
+            var contentVal = getNestedValue(jsonData, rules.contentPath);
+            if (contentVal != null && contentVal !== "") {
+                state.contentText += String(contentVal);
+                state._activeSection = "content";
+                hadContent = true;
+            }
+        }
+
+        // 4. No explicit paths set — use raw data
+        if (!rules.contentPath && !rules.reasoningPath && !rules.toolCallsPath) {
+            if (event.data) {
+                state.accumulatedText += event.data;
+                hadContent = true;
+            }
+        }
+
+        if (!hadContent) return;
+
         // Display based on mode
         if (rules.displayMode === "stream") {
-            if (typeName) {
-                // Group by type
-                if (!state.types[typeName]) state.types[typeName] = "";
-                state.types[typeName] += content;
-                state._activeType = typeName;
-            } else if (rules.rolePath) {
-                var effectiveRole = roleName || "__default__";
-                if (!state.roles[effectiveRole]) state.roles[effectiveRole] = "";
-                state.roles[effectiveRole] += content;
-                state._activeRole = effectiveRole;
-            } else {
-                state.accumulatedText += content;
-            }
             updateRenderedOutput();
         } else if (rules.displayMode === "events") {
-            appendEventCard(event, content, roleName, typeName);
+            var eventContent = "";
+            var eventTypeName = "";
+            // Determine what content to show for this event
+            if (rules.toolCallsPath && jsonData) {
+                var tc = getNestedValue(jsonData, rules.toolCallsPath);
+                if (tc && Array.isArray(tc) && tc.length > 0) {
+                    eventContent = JSON.stringify(tc, null, 2);
+                    eventTypeName = "tool";
+                }
+            }
+            if (!eventContent && rules.reasoningPath && jsonData) {
+                var rv = getNestedValue(jsonData, rules.reasoningPath);
+                if (rv != null && rv !== "") {
+                    eventContent = String(rv);
+                    eventTypeName = "reasoning";
+                }
+            }
+            if (!eventContent && rules.contentPath && jsonData) {
+                var cv = getNestedValue(jsonData, rules.contentPath);
+                if (cv != null && cv !== "") {
+                    eventContent = String(cv);
+                    eventTypeName = "content";
+                }
+            }
+            if (!eventContent) eventContent = event.data || "";
+            appendEventCard(event, eventContent, roleName, eventTypeName);
         } else if (rules.displayMode === "raw") {
-            appendRenderedRawSSE(event, content);
+            appendRenderedRawSSE(event, event.data);
         }
+    }
+
+    function processToolCalls(toolCallsData) {
+        for (var i = 0; i < toolCallsData.length; i++) {
+            var tc = toolCallsData[i];
+            var idx = tc.index != null ? tc.index : i;
+
+            if (!state.toolCalls[idx]) {
+                state.toolCalls[idx] = { id: "", name: "", arguments: "", type: "" };
+                state.toolCallOrder.push(idx);
+            }
+
+            var existing = state.toolCalls[idx];
+            if (tc.id) existing.id = tc.id;
+            if (tc.type) existing.type = tc.type;
+            if (tc.function) {
+                if (tc.function.name) existing.name = tc.function.name;
+                if (tc.function.arguments) existing.arguments += tc.function.arguments;
+            }
+        }
+        state._activeSection = "tool";
     }
 
     function clearEmptyState(el) {
@@ -671,9 +694,11 @@
         clearEmptyState(renderedOutput);
 
         if (rules.displayMode === "stream") {
-            // Priority: type grouping > role grouping > plain stream
-            if (rules.typePath && state.typeOrder.length > 0) {
-                renderedOutput.innerHTML = renderTypeSections(rules);
+            // Check if we have explicit content paths set
+            var hasExplicitPaths = rules.contentPath || rules.reasoningPath || rules.toolCallsPath;
+
+            if (hasExplicitPaths && (state.toolCallOrder.length > 0 || state.reasoningText || state.contentText)) {
+                renderedOutput.innerHTML = renderStructuredSections(rules);
             } else if (rules.rolePath && state.roleOrder.length > 0) {
                 renderedOutput.innerHTML = renderRoleSections(rules);
             } else {
@@ -688,35 +713,84 @@
         statusEvents.textContent = state.events.length + " events";
     }
 
-    function renderTypeSections(rules) {
+    function renderStructuredSections(rules) {
         var html = "";
-        for (var i = 0; i < state.typeOrder.length; i++) {
-            var t = state.typeOrder[i];
-            var text = state.types[t] || "";
-            if (!text && t !== state._activeType) continue;
-            var style = TYPE_STYLES[t] || { label: t, badgeBg: "rgba(168,162,158,0.12)", badgeFg: "#a8a29e", collapsed: false };
-            var collapsedClass = style.collapsed ? " collapsed" : "";
-            html += '<div class="type-section type-' + t + collapsedClass + '" data-type="' + escapeHtml(t) + '">';
+
+        // Tool calls sections
+        for (var i = 0; i < state.toolCallOrder.length; i++) {
+            var idx = state.toolCallOrder[i];
+            var tc = state.toolCalls[idx];
+            if (!tc) continue;
+
+            var isActive = state.isStreaming && state._activeSection === "tool" && i === state.toolCallOrder.length - 1;
+            html += '<div class="type-section type-tool' + (isActive ? "" : "") + '" data-type="tool">';
             html += '<div class="type-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
-            html += '<span class="type-badge" style="background:' + style.badgeBg + ';color:' + style.badgeFg + '">' + escapeHtml(style.label) + '</span>';
-            // Show category for data/tool types
-            if (state.typeCategories[t]) {
-                html += '<span class="type-category">' + escapeHtml(state.typeCategories[t]) + '</span>';
+            html += '<span class="type-badge" style="background:rgba(251,146,60,0.12);color:#fb923c">🔧 Tool Call</span>';
+            if (tc.name) {
+                html += '<span class="tool-call-name">' + escapeHtml(tc.name) + '</span>';
             }
             html += '<span class="type-collapse-icon">▼</span>';
             html += '</div>';
             html += '<div class="type-content">';
-            // Data/tool types always render as JSON
-            if (t === "data" || t === "tool") {
-                html += '<pre><code>' + highlightJSON(text) + '</code></pre>';
-            } else {
-                html += renderContentBlock(text, rules);
+            if (tc.id) {
+                html += '<div class="tool-call-meta"><span class="tool-call-meta-label">ID:</span> <span class="tool-call-meta-value">' + escapeHtml(tc.id) + '</span></div>';
             }
-            if (state.isStreaming && t === state._activeType) {
+            if (tc.type) {
+                html += '<div class="tool-call-meta"><span class="tool-call-meta-label">Type:</span> <span class="tool-call-meta-value">' + escapeHtml(tc.type) + '</span></div>';
+            }
+            if (tc.arguments) {
+                try {
+                    var argsObj = JSON.parse(tc.arguments);
+                    html += '<pre><code>' + highlightJSON(JSON.stringify(argsObj, null, 2)) + '</code></pre>';
+                } catch {
+                    // Arguments still streaming or incomplete JSON
+                    html += '<pre><code>' + escapeHtml(tc.arguments);
+                    if (isActive) {
+                        html += '<span class="streaming-cursor"></span>';
+                    }
+                    html += '</code></pre>';
+                }
+            } else if (isActive) {
                 html += '<span class="streaming-cursor"></span>';
             }
             html += '</div></div>';
         }
+
+        // Reasoning section
+        if (state.reasoningText) {
+            html += '<div class="type-section type-reasoning" data-type="reasoning">';
+            html += '<div class="type-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
+            html += '<span class="type-badge" style="background:rgba(158,158,168,0.12);color:#9e9ea8">💭 Thinking</span>';
+            html += '<span class="type-collapse-icon">▼</span>';
+            html += '</div>';
+            html += '<div class="type-content">';
+            html += renderContentBlock(state.reasoningText, rules);
+            if (state.isStreaming && state._activeSection === "reasoning") {
+                html += '<span class="streaming-cursor"></span>';
+            }
+            html += '</div></div>';
+        }
+
+        // Content section
+        if (state.contentText) {
+            html += '<div class="type-section type-content" data-type="content">';
+            html += '<div class="type-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
+            html += '<span class="type-badge" style="background:rgba(232,168,56,0.12);color:#e8a838">Content</span>';
+            html += '<span class="type-collapse-icon">▼</span>';
+            html += '</div>';
+            html += '<div class="type-content">';
+            html += renderContentBlock(state.contentText, rules);
+            if (state.isStreaming && state._activeSection === "content") {
+                html += '<span class="streaming-cursor"></span>';
+            }
+            html += '</div></div>';
+        }
+
+        // If streaming but no content yet, show cursor
+        if (state.isStreaming && !state.contentText && !state.reasoningText && state.toolCallOrder.length === 0) {
+            html += '<span class="streaming-cursor"></span>';
+        }
+
         return html;
     }
 
@@ -906,13 +980,14 @@
     function resetResponse() {
         state.events = [];
         state.accumulatedText = "";
+        state.contentText = "";
+        state.reasoningText = "";
+        state.toolCalls = {};
+        state.toolCallOrder = [];
+        state._activeSection = "";
         state.roles = {};
         state.roleOrder = [];
         state._activeRole = "";
-        state.types = {};
-        state.typeOrder = [];
-        state.typeCategories = {};
-        state._activeType = "";
         state.responseHeaders = {};
         state.responseStatus = null;
         state.isSSE = false;
@@ -929,13 +1004,14 @@
         clearBtn.addEventListener("click", function () {
             state.events = [];
             state.accumulatedText = "";
+            state.contentText = "";
+            state.reasoningText = "";
+            state.toolCalls = {};
+            state.toolCallOrder = [];
+            state._activeSection = "";
             state.roles = {};
             state.roleOrder = [];
             state._activeRole = "";
-            state.types = {};
-            state.typeOrder = [];
-            state.typeCategories = {};
-            state._activeType = "";
             state.responseHeaders = {};
             state.responseStatus = null;
             state.totalSize = 0;
@@ -951,7 +1027,25 @@
 
     function initCopy() {
         copyBtn.addEventListener("click", function () {
-            const text = state.accumulatedText || renderedOutput.textContent || "";
+            var text = "";
+            // Compose copy text from all structured content
+            if (state.toolCallOrder.length > 0) {
+                for (var i = 0; i < state.toolCallOrder.length; i++) {
+                    var tc = state.toolCalls[state.toolCallOrder[i]];
+                    if (tc) {
+                        text += "[Tool Call: " + tc.name + "]\n";
+                        if (tc.id) text += "ID: " + tc.id + "\n";
+                        text += tc.arguments + "\n\n";
+                    }
+                }
+            }
+            if (state.reasoningText) {
+                text += "[Thinking]\n" + state.reasoningText + "\n\n";
+            }
+            if (state.contentText) {
+                text += state.contentText;
+            }
+            if (!text) text = state.accumulatedText || renderedOutput.textContent || "";
             navigator.clipboard.writeText(text).then(function () {
                 showToast("Copied to clipboard", "success");
             }).catch(function () {
@@ -1067,14 +1161,16 @@
 
         // Parse rules
         if (entry.parseRules) {
-            if (entry.parseRules.dataPath != null) $("#dataPath").value = entry.parseRules.dataPath;
+            if (entry.parseRules.contentPath != null) $("#contentPath").value = entry.parseRules.contentPath;
+            if (entry.parseRules.reasoningPath != null) $("#reasoningPath").value = entry.parseRules.reasoningPath;
+            if (entry.parseRules.toolCallsPath != null) $("#toolCallsPath").value = entry.parseRules.toolCallsPath;
             if (entry.parseRules.rolePath != null) $("#rolePath").value = entry.parseRules.rolePath;
-            if (entry.parseRules.typePath != null) $("#typePath").value = entry.parseRules.typePath;
-            if (entry.parseRules.fallbackPath != null) $("#fallbackPath").value = entry.parseRules.fallbackPath;
             if (entry.parseRules.eventFilter != null) $("#eventFilter").value = entry.parseRules.eventFilter;
             if (entry.parseRules.displayMode) $("#displayMode").value = entry.parseRules.displayMode;
             if (entry.parseRules.contentFormat) $("#contentFormat").value = entry.parseRules.contentFormat;
             if (entry.parseRules.ignoreDone != null) $("#ignoreDone").checked = entry.parseRules.ignoreDone;
+            // Legacy: map old fields for backward compatibility
+            if (entry.parseRules.dataPath != null && !entry.parseRules.contentPath) $("#contentPath").value = entry.parseRules.dataPath;
         }
 
         // SSL

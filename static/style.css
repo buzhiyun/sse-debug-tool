@@ -334,10 +334,45 @@ body {
 }
 
 .tab-content.active {
-    display: block;
+    display: flex;
+    flex-direction: column;
 }
 
-/* KV Editor (Headers & Form) */
+/* Body tab: textarea fills remaining space after body-config */
+.tab-content[data-tab="body"].active {
+    overflow: hidden;
+}
+
+.body-editors {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.body-editor {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.code-editor {
+    width: 100%;
+    flex: 1;
+    min-height: 60px;
+    padding: 12px;
+    background: var(--code-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    resize: none;
+    outline: none;
+    tab-size: 2;
+}
 .kv-editor {
     display: flex;
     flex-direction: column;
@@ -460,27 +495,6 @@ body {
 
 .body-type-selector input[type="radio"] {
     accent-color: var(--accent);
-}
-
-.body-editor {
-    height: 100%;
-}
-
-.code-editor {
-    width: 100%;
-    min-height: 120px;
-    height: calc(100% - 4px);
-    padding: 12px;
-    background: var(--code-bg);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
-    font-size: 12px;
-    line-height: 1.6;
-    resize: none;
-    outline: none;
-    tab-size: 2;
 }
 
 .code-editor:focus {
@@ -824,12 +838,12 @@ body {
 /* Data / tool style */
 .type-section.type-data,
 .type-section.type-tool {
-    border-color: rgba(56, 189, 248, 0.2);
+    border-color: rgba(251, 146, 60, 0.2);
 }
 
 .type-section.type-data .type-header,
 .type-section.type-tool .type-header {
-    background: rgba(56, 189, 248, 0.06);
+    background: rgba(251, 146, 60, 0.06);
 }
 
 .type-section.type-data .type-content pre,
@@ -838,6 +852,39 @@ body {
     border: none;
     background: var(--code-block-bg);
     border-radius: 0;
+}
+
+/* Tool call specific styles */
+.tool-call-name {
+    font-size: 11px;
+    color: var(--text-primary);
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-weight: 600;
+}
+
+.tool-call-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: "SF Mono", "Fira Code", monospace;
+    margin-bottom: 6px;
+}
+
+.tool-call-meta-label {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.tool-call-meta-value {
+    color: var(--text-muted);
+}
+
+/* Content type section */
+.type-section.type-content .type-header {
+    background: rgba(232, 168, 56, 0.06);
+}
+
+.type-section.type-content {
+    border-color: rgba(232, 168, 56, 0.2);
 }
 
 .type-category {
