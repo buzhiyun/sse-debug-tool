@@ -702,7 +702,12 @@
             } else if (rules.rolePath && state.roleOrder.length > 0) {
                 renderedOutput.innerHTML = renderRoleSections(rules);
             } else {
-                var html = renderContentBlock(state.accumulatedText, rules);
+                var html;
+                if (state.responseStatus >= 400 && state.accumulatedText) {
+                    html = renderErrorContent(state.accumulatedText);
+                } else {
+                    html = renderContentBlock(state.accumulatedText, rules);
+                }
                 if (state.isStreaming) html += '<span class="streaming-cursor"></span>';
                 renderedOutput.innerHTML = '<div class="rendered-content">' + html + "</div>";
             }
@@ -828,6 +833,16 @@
             return '<pre><code>' + highlightJSON(text) + '</code></pre>';
         } else {
             return '<div class="rendered-content">' + escapeHtml(text) + '</div>';
+        }
+    }
+
+    function renderErrorContent(text) {
+        if (!text) return "";
+        try {
+            var obj = JSON.parse(text);
+            return '<div class="error-content"><pre><code>' + highlightJSON(JSON.stringify(obj, null, 2)) + '</code></pre></div>';
+        } catch {
+            return '<div class="error-content">' + escapeHtml(text) + '</div>';
         }
     }
 

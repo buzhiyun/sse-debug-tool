@@ -131,7 +131,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		"isSSE":   isSSE,
 	})
 
-	if isSSE {
+	if isSSE && resp.StatusCode < 400 {
 		parseSSEStream(resp.Body, w, flusher)
 	} else {
 		streamRawBody(resp.Body, w, flusher)
